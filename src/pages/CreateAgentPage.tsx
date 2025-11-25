@@ -8,7 +8,7 @@ import { useMutation } from '@tanstack/react-query';
 import { Upload, X, Plus, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Layout } from '@/components/Layout';
-import { agentService, CreateAgentData } from '@/services/agent.service';
+import agentService, { AgentCreateData } from '@/services/agent.service';
 
 const agentSchema = z.object({
     name: z.string().min(1, 'Name is required'),
@@ -41,7 +41,7 @@ export const CreateAgentPage = () => {
     });
 
     const createMutation = useMutation({
-        mutationFn: (data: CreateAgentData) => agentService.createAgent(data),
+        mutationFn: (data: AgentCreateData) => agentService.createAgent(data),
         onSuccess: (response) => {
             toast.success('Agent created successfully!');
             navigate(`/agents`);
@@ -78,7 +78,7 @@ export const CreateAgentPage = () => {
             return;
         }
 
-        const agentData: CreateAgentData = {
+        const agentData: AgentCreateData = {
             ...data,
             expertise_areas: expertiseAreas,
             resume_file: resumeFile || undefined,

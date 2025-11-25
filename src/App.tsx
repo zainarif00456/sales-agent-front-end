@@ -10,6 +10,7 @@ import {
     DashboardPage,
     AgentsListPage,
     CreateAgentPage,
+    AgentEditPage,
     ConversationsListPage,
     ConversationPage,
     NewConversationPage,
@@ -68,6 +69,14 @@ function App() {
                         element={
                             <ProtectedRoute>
                                 <CreateAgentPage />
+                            </ProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/agents/:id/edit"
+                        element={
+                            <ProtectedRoute>
+                                <AgentEditPage />
                             </ProtectedRoute>
                         }
                     />

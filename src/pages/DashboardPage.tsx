@@ -4,7 +4,7 @@ import { Users, MessageSquare, TrendingUp, Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Layout } from '@/components/Layout';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
-import { agentService } from '@/services/agent.service';
+import agentService from '@/services/agent.service';
 import { conversationService } from '@/services/conversation.service';
 
 export const DashboardPage = () => {
@@ -132,8 +132,8 @@ export const DashboardPage = () => {
                                         <div className="text-right">
                                             <span
                                                 className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${conversation.is_active
-                                                        ? 'bg-green-500/20 text-green-500'
-                                                        : 'bg-gray-500/20 text-gray-500'
+                                                    ? 'bg-green-500/20 text-green-500'
+                                                    : 'bg-gray-500/20 text-gray-500'
                                                     }`}
                                             >
                                                 {conversation.is_active ? 'Active' : 'Inactive'}

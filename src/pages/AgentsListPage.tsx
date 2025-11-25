@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Layout } from '@/components/Layout';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
-import { agentService } from '@/services/agent.service';
+import agentService from '@/services/agent.service';
 
 export const AgentsListPage = () => {
     const navigate = useNavigate();
