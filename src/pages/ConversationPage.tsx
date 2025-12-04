@@ -2,12 +2,14 @@ import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, User, Bot, Loader2 } from 'lucide-react';
+import { Send, User, Bot, Loader2, FileText, Image as ImageIcon } from 'lucide-react';
 import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Layout } from '@/components/Layout';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
+import { FileUpload } from '@/components/FileUpload';
+import { ClientProfileDisplay } from '@/components/ClientProfileDisplay';
 import { conversationService, SendMessageData } from '@/services/conversation.service';
 
 export const ConversationPage = () => {
@@ -18,6 +20,7 @@ export const ConversationPage = () => {
 
     const [message, setMessage] = useState('');
     const [messageType, setMessageType] = useState<'user' | 'client'>('user');
+    const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
     const { data: session, isLoading } = useQuery({
         queryKey: ['conversation', sessionId],
@@ -47,27 +50,40 @@ export const ConversationPage = () => {
                 user_message: newMessage.message,
                 is_user_query: newMessage.is_user_query,
                 is_client_query: newMessage.is_client_query,
+                attachment_file: newMessage.attachment_file ? 'uploading...' : undefined,
                 agent_response: '', // Empty initially
                 created_at: new Date().toISOString(),
             };
 
             setLocalMessages(prev => [...prev, optimisitcMessage]);
             setMessage('');
+            setSelectedFile(null);
 
             return { previousSession };
         },
-        onSuccess: (data) => {
+        onSuccess: (response) => {
             // Update with real response
             setLocalMessages(prev => {
                 const newMessages = [...prev];
                 // Replace the last message (optimistic) with the real one
-                newMessages[newMessages.length - 1] = data;
+                newMessages[newMessages.length - 1] = response.data;
                 return newMessages;
             });
+
+            // Show success toast for client profile extraction
+            if (response.client_profile_extracted && response.data.client_profile_data) {
+                const clientName = response.data.client_profile_data.name || 'Client';
+                toast.success(`Client profile extracted successfully for ${clientName}!`, {
+                    duration: 4000,
+                    icon: '✅',
+                });
+            }
+
             queryClient.invalidateQueries({ queryKey: ['conversation', sessionId] });
         },
         onError: (_err, _newTodo, context: any) => {
             toast.error('Failed to send message');
+            setSelectedFile(null); // Clear file on error
             if (context?.previousSession) {
                 queryClient.setQueryData(['conversation', sessionId], context.previousSession);
             }
@@ -76,12 +92,16 @@ export const ConversationPage = () => {
 
     const handleSendMessage = (e: React.FormEvent) => {
         e.preventDefault();
-        if (!message.trim()) return;
+        if (!message.trim() && !selectedFile) {
+            toast.error('Please enter a message or attach a file');
+            return;
+        }
 
         const messageData: SendMessageData = {
-            message: message.trim(),
+            message: message.trim() || 'Uploaded document',
             is_user_query: messageType === 'user',
             is_client_query: messageType === 'client',
+            attachment_file: selectedFile || undefined,
         };
 
         sendMessageMutation.mutate(messageData);
@@ -167,6 +187,30 @@ export const ConversationPage = () => {
                                                 </div>
                                                 <div className="bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-2xl rounded-tr-sm px-4 py-3">
                                                     <p className="text-sm">{msg.user_message}</p>
+
+                                                    {/* Attachment Display */}
+                                                    {msg.attachment_file && msg.attachment_file !== 'uploading...' && (
+                                                        <a
+                                                            href={msg.attachment_file}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="mt-2 flex items-center gap-2 text-xs bg-white/20 hover:bg-white/30 rounded-lg px-3 py-2 transition-colors"
+                                                        >
+                                                            {msg.attachment_file.endsWith('.pdf') ? (
+                                                                <FileText className="w-4 h-4" />
+                                                            ) : (
+                                                                <ImageIcon className="w-4 h-4" />
+                                                            )}
+                                                            <span>View Attachment</span>
+                                                        </a>
+                                                    )}
+
+                                                    {/* Client Profile Badge */}
+                                                    {msg.client_profile_data && Object.keys(msg.client_profile_data).length > 0 && (
+                                                        <div className="mt-2 text-xs bg-green-500/20 border border-green-500/30 rounded-lg px-3 py-1.5">
+                                                            ✅ Client profile extracted: {msg.client_profile_data.name || 'Unknown'}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
                                         </motion.div>
@@ -227,6 +271,13 @@ export const ConversationPage = () => {
                                                             </p>
                                                         )}
                                                     </div>
+
+                                                    {/* Client Profile Display */}
+                                                    {msg.client_profile_data && Object.keys(msg.client_profile_data).length > 0 && (
+                                                        <div className="mt-4">
+                                                            <ClientProfileDisplay profile={msg.client_profile_data} />
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </motion.div>
                                         ) : (
@@ -314,13 +365,20 @@ export const ConversationPage = () => {
                             </motion.button>
                         </div>
 
+                        {/* File Upload */}
+                        <FileUpload
+                            onFileSelect={setSelectedFile}
+                            selectedFile={selectedFile}
+                            disabled={sendMessageMutation.isPending}
+                        />
+
                         {/* Input Field */}
                         <div className="flex gap-2">
                             <input
                                 type="text"
                                 value={message}
                                 onChange={(e) => setMessage(e.target.value)}
-                                placeholder="Type your message..."
+                                placeholder={selectedFile ? 'Add a message about this file...' : 'Type your message...'}
                                 className="input-field flex-1"
                                 disabled={sendMessageMutation.isPending}
                             />
@@ -328,7 +386,7 @@ export const ConversationPage = () => {
                                 whileHover={{ scale: 1.05 }}
                                 whileTap={{ scale: 0.95 }}
                                 type="submit"
-                                disabled={!message.trim() || sendMessageMutation.isPending}
+                                disabled={(!message.trim() && !selectedFile) || sendMessageMutation.isPending}
                                 className="btn-primary px-6 flex items-center gap-2"
                             >
                                 {sendMessageMutation.isPending ? (
@@ -344,6 +402,6 @@ export const ConversationPage = () => {
                     </form>
                 </motion.div>
             </div>
-        </Layout>
+        </Layout >
     );
 };
