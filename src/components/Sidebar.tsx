@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Home, Users, MessageSquare, LogOut } from 'lucide-react';
+import { Home, Users, MessageSquare, LogOut, FileText } from 'lucide-react';
 import { useAuthStore } from '@/store/auth.store';
 import { motion } from 'framer-motion';
 import { ThemeToggle } from './ThemeToggle';
@@ -8,6 +8,7 @@ const navItems = [
     { to: '/dashboard', icon: Home, label: 'Dashboard' },
     { to: '/agents', icon: Users, label: 'Agents' },
     { to: '/conversations', icon: MessageSquare, label: 'Conversations' },
+    { to: '/documentation', icon: FileText, label: 'Documentation' },
 ];
 
 export const Sidebar = () => {

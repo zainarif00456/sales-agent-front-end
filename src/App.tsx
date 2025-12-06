@@ -15,6 +15,7 @@ import {
     ConversationPage,
     NewConversationPage,
 } from './pages';
+import { DocumentationPage, PagesProvider } from './modules/documentation';
 
 const queryClient = new QueryClient({
     defaultOptions: {
@@ -101,6 +102,16 @@ function App() {
                         element={
                             <ProtectedRoute>
                                 <ConversationPage />
+                            </ProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/documentation"
+                        element={
+                            <ProtectedRoute>
+                                <PagesProvider>
+                                    <DocumentationPage />
+                                </PagesProvider>
                             </ProtectedRoute>
                         }
                     />
