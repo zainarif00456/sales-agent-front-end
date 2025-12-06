@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Sidebar } from './Sidebar';
 
 interface LayoutProps {
@@ -5,10 +6,17 @@ interface LayoutProps {
 }
 
 export const Layout = ({ children }: LayoutProps) => {
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
     return (
         <div className="flex min-h-screen bg-[var(--bg-primary)]">
-            <Sidebar />
-            <main className="flex-1 ml-64 p-8">
+            <Sidebar collapsed={sidebarCollapsed} onToggle={setSidebarCollapsed} />
+            <main
+                className="flex-1 p-8 transition-all duration-300"
+                style={{
+                    marginLeft: sidebarCollapsed ? '80px' : '256px'
+                }}
+            >
                 {children}
             </main>
         </div>

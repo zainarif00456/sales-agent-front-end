@@ -1,193 +1,140 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Page } from '../types';
-import { StorageService } from '../utils/storage';
-import { createNewPage } from '../utils/helpers';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
+import { Document } from '../types';
+import { useDocumentTree, useDocumentMutations } from '../hooks/useDocumentation';
 
 interface PagesContextType {
-    pages: Record<string, Page>;
-    activePage: Page | null;
-    setActivePage: (page: Page | null) => void;
-    createPage: (title?: string, parentId?: string | null) => Page;
-    updatePage: (pageId: string, updates: Partial<Page>) => void;
-    deletePage: (pageId: string) => void;
+    pages: Record<number, Document>;
+    tree: Document[]; // Add tree to expose hierarchical structure
+    activePage: Document | null;
+    setActivePage: (page: Document | null) => void;
+    createPage: (title?: string, parentId?: number | null) => Promise<Document>;
+    updatePage: (pageId: number, updates: Partial<Document>) => Promise<void>;
+    deletePage: (pageId: number) => Promise<void>;
     loading: boolean;
+    refreshTree: () => void;
 }
 
 const PagesContext = createContext<PagesContextType | undefined>(undefined);
 
 export const PagesProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-    const [pages, setPages] = useState<Record<string, Page>>({});
-    const [activePage, setActivePageState] = useState<Page | null>(null);
-    const [loading, setLoading] = useState(true);
+    const [pages, setPages] = useState<Record<number, Document>>({});
+    const [activePage, setActivePageState] = useState<Document | null>(null);
+    const { tree, loading, refetch: refreshTree } = useDocumentTree();
+    const { createDocument, deleteDocument } = useDocumentMutations();
 
-    // Load pages on mount
+    // Convert tree to flat pages object
     useEffect(() => {
-        loadPagesFromStorage();
+        const flattenTree = (docs: Document[]): Record<number, Document> => {
+            const result: Record<number, Document> = {};
+
+            const flatten = (doc: Document) => {
+                result[doc.id] = doc;
+                if (doc.children && doc.children.length > 0) {
+                    doc.children.forEach(flatten);
+                }
+            };
+
+            docs.forEach(flatten);
+            return result;
+        };
+
+        if (tree.length > 0) {
+            const flatPages = flattenTree(tree);
+            setPages(flatPages);
+
+            // Don't auto-select first page - let user choose from tree
+            // Only update activePage if it was deleted or doesn't exist anymore
+            if (activePage && !flatPages[activePage.id]) {
+                setActivePageState(null);
+            }
+        }
+    }, [tree]); // Remove activePage from dependencies to prevent loops
+
+    const setActivePage = useCallback((page: Document | null) => {
+        setActivePageState(page);
     }, []);
 
-    // Save pages whenever they change
-    useEffect(() => {
-        if (!loading && Object.keys(pages).length > 0) {
-            StorageService.savePages(pages);
-        }
-    }, [pages, loading]);
-
-    // Save active page ID whenever it changes
-    useEffect(() => {
-        if (activePage) {
-            StorageService.saveActivePageId(activePage.id);
-        }
-    }, [activePage]);
-
-    const loadPagesFromStorage = () => {
+    const createPage = useCallback(async (title: string = 'Untitled', parentId: number | null = null): Promise<Document> => {
         try {
-            const loadedPages = StorageService.loadPages();
+            const newPage = await createDocument({
+                title,
+                content: '',
+                parent: parentId,
+                is_public: false,
+                is_published: false,
+            });
 
-            // If no pages exist, create a default welcome page
-            if (Object.keys(loadedPages).length === 0) {
-                const welcomePage = createNewPage('Welcome to Documentation', null);
-                welcomePage.content = `# Welcome to Documentation! 📝
+            // Refresh tree to get updated structure
+            await refreshTree();
 
-This is a powerful markdown-based documentation system with the following features:
-
-## Features
-- **Nested Pages**: Create hierarchical page structures
-- **Markdown Support**: Full markdown formatting
-- **Mermaid Diagrams**: Visualize flowcharts and diagrams
-- **Export Options**: Export to PDF, HTML, or MD
-- **Offline Storage**: All data persists locally
-
-## Quick Commands
-Type \`/\` to see available commands:
-- \`/h1\`, \`/h2\`, \`/h3\` - Headings
-- \`/code\` - Code block
-- \`/page\` - Create new page
-
-## Try Mermaid Diagrams
-\`\`\`mermaid
-graph TD
-    A[Start] --> B{Is it working?}
-    B -->|Yes| C[Great!]
-    B -->|No| D[Check the docs]
-    C --> E[Build something awesome]
-    D --> E
-\`\`\`
-
-Start creating your documentation now! 🚀`;
-
-                loadedPages[welcomePage.id] = welcomePage;
-                setPages(loadedPages);
-                setActivePageState(welcomePage);
-            } else {
-                setPages(loadedPages);
-
-                // Try to restore the last active page
-                const activePageId = StorageService.loadActivePageId();
-                if (activePageId && loadedPages[activePageId]) {
-                    setActivePageState(loadedPages[activePageId]);
-                } else {
-                    // Set first page as active
-                    const firstPage = Object.values(loadedPages)[0];
-                    setActivePageState(firstPage);
-                }
-            }
+            return newPage;
         } catch (error) {
-            console.error('Error loading pages:', error);
-        } finally {
-            setLoading(false);
+            console.error('Error creating page:', error);
+            throw error;
         }
-    };
+    }, [createDocument, refreshTree]);
 
-    const setActivePage = (page: Page | null) => {
-        setActivePageState(page);
-    };
+    const updatePage = useCallback(async (pageId: number, updates: Partial<Document>) => {
+        try {
+            // Optimistically update local state
+            setPages(prev => {
+                if (!prev[pageId]) return prev;
 
-    const createPage = (title: string = 'Untitled', parentId: string | null = null): Page => {
-        const newPage = createNewPage(title, parentId);
-
-        setPages(prev => {
-            const updated = { ...prev, [newPage.id]: newPage };
-
-            // Update parent's children array
-            if (parentId && prev[parentId]) {
-                updated[parentId] = {
-                    ...prev[parentId],
-                    children: [...prev[parentId].children, newPage.id],
+                const updatedPage = {
+                    ...prev[pageId],
+                    ...updates,
+                    updated_at: new Date().toISOString(),
                 };
-            }
 
-            return updated;
-        });
+                const newPages = { ...prev, [pageId]: updatedPage };
 
-        return newPage;
-    };
-
-    const updatePage = (pageId: string, updates: Partial<Page>) => {
-        setPages(prev => {
-            if (!prev[pageId]) return prev;
-
-            const updatedPage = {
-                ...prev[pageId],
-                ...updates,
-                updatedAt: Date.now(),
-            };
-
-            const newPages = { ...prev, [pageId]: updatedPage };
-
-            // Update active page if it's the one being updated
-            if (activePage?.id === pageId) {
-                setActivePageState(updatedPage);
-            }
-
-            return newPages;
-        });
-    };
-
-    const deletePage = (pageId: string) => {
-        setPages(prev => {
-            const page = prev[pageId];
-            if (!page) return prev;
-
-            const newPages = { ...prev };
-
-            // Remove from parent's children
-            if (page.parentId && newPages[page.parentId]) {
-                newPages[page.parentId] = {
-                    ...newPages[page.parentId],
-                    children: newPages[page.parentId].children.filter(id => id !== pageId),
-                };
-            }
-
-            // Recursively delete children
-            const deleteRecursive = (id: string) => {
-                const pageToDelete = newPages[id];
-                if (pageToDelete) {
-                    pageToDelete.children.forEach(childId => deleteRecursive(childId));
-                    delete newPages[id];
+                // Update active page if it's the one being updated
+                if (activePage?.id === pageId) {
+                    setActivePageState(updatedPage);
                 }
-            };
 
-            deleteRecursive(pageId);
+                return newPages;
+            });
 
-            // If active page was deleted, set to null
+            // Send update to backend (will be handled by autosave in the component)
+            // We don't call updateDocument here to avoid duplicate requests
+        } catch (error) {
+            console.error('Error updating page:', error);
+            // Revert optimistic update on error
+            await refreshTree();
+            throw error;
+        }
+    }, [activePage, refreshTree]);
+
+    const deletePage = useCallback(async (pageId: number) => {
+        try {
+            await deleteDocument(pageId);
+
+            // If active page was deleted, clear it
             if (activePage?.id === pageId) {
                 setActivePageState(null);
             }
 
-            return newPages;
-        });
-    };
+            // Refresh tree to get updated structure
+            await refreshTree();
+        } catch (error) {
+            console.error('Error deleting page:', error);
+            throw error;
+        }
+    }, [deleteDocument, activePage, refreshTree]);
 
     return (
         <PagesContext.Provider
             value={{
                 pages,
+                tree,
                 activePage,
                 setActivePage,
                 createPage,
                 updatePage,
                 deletePage,
                 loading,
+                refreshTree,
             }}
         >
             {children}

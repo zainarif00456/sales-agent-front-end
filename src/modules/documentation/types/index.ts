@@ -1,13 +1,5 @@
-export interface Page {
-    id: string;
-    title: string;
-    content: string;
-    parentId: string | null;
-    createdAt: number;
-    updatedAt: number;
-    children: string[];
-    icon?: string;
-}
+// Re-export types from service for consistency
+export type { Document, CreateDocumentData, UpdateDocumentData, DocumentVersion, Breadcrumb } from '@/services/documentation.service';
 
 export interface Command {
     trigger: string;
@@ -16,4 +8,4 @@ export interface Command {
     action: (editor: any) => void;
 }
 
-export type ExportFormat = 'pdf' | 'docx' | 'md';
+export type ExportFormat = 'pdf' | 'docx' | 'md' | 'html' | 'txt';

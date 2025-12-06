@@ -37,11 +37,12 @@
     cursor: pointer;
     transition: all 0.3s ease;
     position: relative;
+    overflow: visible;
+    width: 100%;
 }
 
 .mermaid-preview:hover {
     background-color: var(--bg-tertiary);
-    transform: scale(1.02);
 }
 
 .mermaid-preview::after {
@@ -56,6 +57,7 @@
     font-size: 11px;
     opacity: 0;
     transition: opacity 0.3s ease;
+    pointer-events: none;
 }
 
 .mermaid-preview:hover::after {
@@ -63,10 +65,10 @@
 }
 
 .mermaid-preview svg {
-    width: 100%;
     max-width: 100%;
-    height: auto;
-    overflow: visible;
+    height: auto !important;
+    width: auto !important;
+    display: block;
 }
 
 .mermaid-preview svg text {
@@ -168,7 +170,6 @@
 
     to {
         transform: scale(1);
-        opacity: 1;
     }
 }
 

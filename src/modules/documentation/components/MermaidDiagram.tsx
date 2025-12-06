@@ -13,17 +13,16 @@ mermaid.initialize({
     theme: 'dark',
     securityLevel: 'loose',
     flowchart: {
-        useMaxWidth: true,
+        useMaxWidth: false, // Allow diagram to use its natural width
         htmlLabels: true,
         curve: 'basis',
-        padding: 15,
-        nodeSpacing: 50,
-        rankSpacing: 50,
-        diagramPadding: 20,
-        wrappingWidth: 250
+        padding: 20,
+        nodeSpacing: 70,
+        rankSpacing: 70,
+        diagramPadding: 30,
     },
     themeVariables: {
-        fontSize: '14px',
+        fontSize: '16px',
         fontFamily: 'arial, sans-serif'
     },
     wrap: true,

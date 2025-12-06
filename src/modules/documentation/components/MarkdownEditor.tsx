@@ -26,7 +26,7 @@ const COMMANDS: Command[] = [
 interface MarkdownEditorProps {
     value: string;
     onChange: (text: string) => void;
-    pageId: string;
+    pageId: number;
 }
 
 const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ value, onChange, pageId }) => {
@@ -64,12 +64,16 @@ const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ value, onChange, pageId
         }
     };
 
-    const handleCommandSelect = (command: Command) => {
+    const handleCommandSelect = async (command: Command) => {
         if (command.trigger === '/page') {
             // Create new page
-            const newPage = createPage('Untitled', pageId);
-            setActivePage(newPage);
-            setShowCommands(false);
+            try {
+                const newPage = await createPage('Untitled', pageId);
+                setActivePage(newPage);
+                setShowCommands(false);
+            } catch (error) {
+                console.error('Failed to create page:', error);
+            }
             return;
         }
 

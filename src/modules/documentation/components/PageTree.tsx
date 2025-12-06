@@ -1,8 +1,17 @@
 import React, { useState } from 'react';
 import { usePages } from '../contexts/PagesContext';
-import { Page } from '../types';
-import { formatDate } from '../utils/helpers';
+import { Document } from '../types';
 import './PageTree.css';
+
+// Helper to format date
+const formatDate = (dateString: string): string => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+    });
+};
 
 interface PageTreeProps {
     visible: boolean;
@@ -11,12 +20,12 @@ interface PageTreeProps {
 
 const PageTree: React.FC<PageTreeProps> = ({ visible, onClose }) => {
     const { pages, activePage, setActivePage, createPage, deletePage } = usePages();
-    const [expandedPages, setExpandedPages] = useState<Set<string>>(new Set());
+    const [expandedPages, setExpandedPages] = useState<Set<number>>(new Set());
     const [searchQuery, setSearchQuery] = useState('');
 
     if (!visible) return null;
 
-    const toggleExpand = (pageId: string) => {
+    const toggleExpand = (pageId: number) => {
         setExpandedPages(prev => {
             const newSet = new Set(prev);
             if (newSet.has(pageId)) {
@@ -28,27 +37,50 @@ const PageTree: React.FC<PageTreeProps> = ({ visible, onClose }) => {
         });
     };
 
-    const handlePageSelect = (page: Page) => {
-        setActivePage(page);
+    const handlePageSelect = async (page: Document) => {
+        console.log('[PageTree] Page selected:', page.id, page.title);
+        console.log('[PageTree] Page content from tree:', page.content?.substring(0, 100));
+
+        // Fetch the full document from backend to ensure we have complete content
+        try {
+            const { documentationService } = await import('@/services/documentation.service');
+            console.log('[PageTree] Fetching full document from backend...');
+            const fullDocument = await documentationService.getDocument(page.id);
+            console.log('[PageTree] Full document fetched:', fullDocument);
+            console.log('[PageTree] Full content length:', fullDocument.content?.length);
+            setActivePage(fullDocument);
+        } catch (error) {
+            console.error('[PageTree] Failed to fetch full document, using tree data:', error);
+            // Fallback to tree data if fetch fails
+            setActivePage(page);
+        }
         onClose();
     };
 
-    const handleDeletePage = (page: Page, event: React.MouseEvent) => {
+    const handleDeletePage = async (page: Document, event: React.MouseEvent) => {
         event.stopPropagation();
         if (window.confirm(`Are you sure you want to delete "${page.title}" and all its subpages?`)) {
-            deletePage(page.id);
+            try {
+                await deletePage(page.id);
+            } catch (error) {
+                console.error('Failed to delete page:', error);
+            }
         }
     };
 
-    const handleCreatePage = () => {
-        const newPage = createPage('Untitled', null);
-        setActivePage(newPage);
-        onClose();
+    const handleCreatePage = async () => {
+        try {
+            const newPage = await createPage('Untitled', null);
+            setActivePage(newPage);
+            onClose();
+        } catch (error) {
+            console.error('Failed to create page:', error);
+        }
     };
 
-    const renderPageItem = (page: Page, depth: number = 0): JSX.Element => {
+    const renderPageItem = (page: Document, depth: number = 0): JSX.Element => {
         const isExpanded = expandedPages.has(page.id);
-        const hasChildren = page.children.length > 0;
+        const hasChildren = page.children && page.children.length > 0;
         const isActive = activePage?.id === page.id;
 
         return (
@@ -74,7 +106,7 @@ const PageTree: React.FC<PageTreeProps> = ({ visible, onClose }) => {
 
                     <div className="page-info">
                         <div className="page-title">{page.title}</div>
-                        <div className="page-date">{formatDate(page.updatedAt)}</div>
+                        <div className="page-date">{formatDate(page.updated_at)}</div>
                     </div>
 
                     <button
@@ -88,23 +120,20 @@ const PageTree: React.FC<PageTreeProps> = ({ visible, onClose }) => {
 
                 {isExpanded && hasChildren && (
                     <div>
-                        {page.children.map(childId => {
-                            const childPage = pages[childId];
-                            return childPage ? renderPageItem(childPage, depth + 1) : null;
-                        })}
+                        {page.children!.map((childDoc: Document) => renderPageItem(childDoc, depth + 1))}
                     </div>
                 )}
             </div>
         );
     };
 
-    const getRootPages = (): Page[] => {
+    const getRootPages = (): Document[] => {
         return Object.values(pages)
-            .filter(page => !page.parentId)
-            .sort((a, b) => b.updatedAt - a.updatedAt);
+            .filter(page => !page.parent)
+            .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
     };
 
-    const getFilteredPages = (): Page[] => {
+    const getFilteredPages = (): Document[] => {
         if (!searchQuery.trim()) {
             return getRootPages();
         }
@@ -115,7 +144,7 @@ const PageTree: React.FC<PageTreeProps> = ({ visible, onClose }) => {
                 page.title.toLowerCase().includes(query) ||
                 page.content.toLowerCase().includes(query)
             )
-            .sort((a, b) => b.updatedAt - a.updatedAt);
+            .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
     };
 
     return (
