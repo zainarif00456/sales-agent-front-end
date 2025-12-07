@@ -4,13 +4,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Send, User, Bot, Loader2, FileText, Image as ImageIcon } from 'lucide-react';
 import toast from 'react-hot-toast';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { Layout } from '@/components/Layout';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { FileUpload } from '@/components/FileUpload';
 import { ClientProfileDisplay } from '@/components/ClientProfileDisplay';
+import { WebSocketStatusIndicator } from '@/components/WebSocketStatusIndicator';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { conversationService, SendMessageData } from '@/services/conversation.service';
+import { useAgentWebSocket } from '@/hooks/useAgentWebSocket';
 
 export const ConversationPage = () => {
     const { sessionId } = useParams<{ sessionId: string }>();
@@ -21,6 +23,11 @@ export const ConversationPage = () => {
     const [message, setMessage] = useState('');
     const [messageType, setMessageType] = useState<'user' | 'client'>('user');
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const [isThinking, setIsThinking] = useState(false);
+    const [thinkingMessage, setThinkingMessage] = useState('');
+
+    // Get auth token for WebSocket
+    const token = localStorage.getItem('access_token') || '';
 
     const { data: session, isLoading } = useQuery({
         queryKey: ['conversation', sessionId],
@@ -30,22 +37,127 @@ export const ConversationPage = () => {
 
     const [localMessages, setLocalMessages] = useState<any[]>([]);
 
+    // WebSocket hook
+    const {
+        status: wsStatus,
+        isConnected,
+        sendMessage: wsSendMessage,
+        reconnect,
+        reconnectAttempts,
+    } = useAgentWebSocket({
+        agentId: session?.agent || '',
+        token,
+        enabled: !!session?.agent && !!token,
+        onConnectionEstablished: (data) => {
+            console.log('Connected to agent:', data.agent_name);
+            toast.success(`Connected to ${data.agent_name}`, { duration: 2000 });
+        },
+        onAgentThinking: (data) => {
+            console.log('💭 Agent is thinking:', data.message);
+            setIsThinking(true);
+            setThinkingMessage(data.message || 'Thinking...');
+        },
+        onStreamStart: (data) => {
+            console.log('🌊 Stream started for message:', data.message_id);
+            setIsThinking(false);
+
+            // Add the backend_message_id to the last user message so we can associate streaming chunks with it
+            setLocalMessages(prev => {
+                const lastIdx = prev.length - 1;
+                if (lastIdx >= 0 && prev[lastIdx].user_message && !prev[lastIdx].backend_message_id) {
+                    const updated = [...prev];
+                    updated[lastIdx] = {
+                        ...updated[lastIdx],
+                        backend_message_id: data.message_id,
+                        agent_response: '', // Initialize empty agent response for streaming
+                        isStreaming: true,
+                    };
+                    return updated;
+                }
+                return prev;
+            });
+        },
+        onAgentStreaming: (data) => {
+            console.log('📝 Streaming chunk:', data.chunk);
+
+            setLocalMessages((prev) => {
+                // Find the message with this backend_message_id
+                const msgIndex = prev.findIndex(
+                    (msg) => msg.backend_message_id === data.message_id
+                );
+
+                if (msgIndex >= 0) {
+                    // Update existing message by APPENDING the chunk
+                    const updated = [...prev];
+                    updated[msgIndex] = {
+                        ...updated[msgIndex],
+                        agent_response: (updated[msgIndex].agent_response || '') + data.chunk,
+                        isStreaming: true,
+                    };
+                    return updated;
+                } else {
+                    // This shouldn't happen if stream_start worked correctly
+                    // But as a fallback, find the last user message and update it
+                    const lastUserMsgIndex = prev.length - 1;
+                    if (lastUserMsgIndex >= 0) {
+                        const updated = [...prev];
+                        updated[lastUserMsgIndex] = {
+                            ...updated[lastUserMsgIndex],
+                            backend_message_id: data.message_id,
+                            agent_response: (updated[lastUserMsgIndex].agent_response || '') + data.chunk,
+                            isStreaming: true,
+                        };
+                        return updated;
+                    }
+                    return prev;
+                }
+            });
+        },
+        onAgentComplete: (data) => {
+            console.log('✅ Stream complete:', data.message_id);
+
+            setIsThinking(false);
+
+            // Mark message as complete (stop showing cursor)
+            setLocalMessages((prev) =>
+                prev.map((msg) =>
+                    msg.backend_message_id === data.message_id
+                        ? {
+                            ...msg,
+                            isStreaming: false,
+                            agent_response: data.full_response,
+                            response_time_ms: data.response_time_ms,
+                        }
+                        : msg
+                )
+            );
+
+            // Invalidate query to get fresh data
+            queryClient.invalidateQueries({ queryKey: ['conversation', sessionId] });
+        },
+        onError: (data) => {
+            setIsThinking(false);
+            toast.error(data.message || 'WebSocket error occurred');
+        },
+    });
+
     useEffect(() => {
         if (session?.messages) {
             setLocalMessages(session.messages);
         }
     }, [session?.messages]);
 
+    // Fallback mutation for file uploads (WebSocket doesn't support file uploads)
     const sendMessageMutation = useMutation({
         mutationFn: (data: SendMessageData) =>
             conversationService.sendMessage(sessionId!, data),
-        onMutate: async (newMessage) => {
+        onMutate: async (newMessage: SendMessageData) => {
             await queryClient.cancelQueries({ queryKey: ['conversation', sessionId] });
 
             const previousSession = queryClient.getQueryData(['conversation', sessionId]);
 
             // Optimistically add user message
-            const optimisitcMessage = {
+            const optimisticMessage = {
                 id: Date.now().toString(),
                 user_message: newMessage.message,
                 is_user_query: newMessage.is_user_query,
@@ -55,13 +167,13 @@ export const ConversationPage = () => {
                 created_at: new Date().toISOString(),
             };
 
-            setLocalMessages(prev => [...prev, optimisitcMessage]);
+            setLocalMessages(prev => [...prev, optimisticMessage]);
             setMessage('');
             setSelectedFile(null);
 
             return { previousSession };
         },
-        onSuccess: (response) => {
+        onSuccess: (response: any) => {
             // Update with real response
             setLocalMessages(prev => {
                 const newMessages = [...prev];
@@ -81,7 +193,7 @@ export const ConversationPage = () => {
 
             queryClient.invalidateQueries({ queryKey: ['conversation', sessionId] });
         },
-        onError: (_err, _newTodo, context: any) => {
+        onError: (_err: any, _newTodo: any, context: any) => {
             toast.error('Failed to send message');
             setSelectedFile(null); // Clear file on error
             if (context?.previousSession) {
@@ -97,19 +209,54 @@ export const ConversationPage = () => {
             return;
         }
 
-        const messageData: SendMessageData = {
-            message: message.trim() || 'Uploaded document',
-            is_user_query: messageType === 'user',
-            is_client_query: messageType === 'client',
-            attachment_file: selectedFile || undefined,
-        };
+        // If there's a file attachment, use REST API
+        if (selectedFile) {
+            const messageData: SendMessageData = {
+                message: message.trim() || 'Uploaded document',
+                is_user_query: messageType === 'user',
+                is_client_query: messageType === 'client',
+                attachment_file: selectedFile,
+            };
+            sendMessageMutation.mutate(messageData);
+            return;
+        }
 
-        sendMessageMutation.mutate(messageData);
+        // Otherwise, use WebSocket for streaming
+        if (isConnected) {
+            // Add user message optimistically
+            const userMessage = {
+                id: `user-${Date.now()}`,
+                user_message: message.trim(),
+                is_user_query: messageType === 'user',
+                is_client_query: messageType === 'client',
+                agent_response: '',
+                created_at: new Date().toISOString(),
+            };
+            setLocalMessages(prev => [...prev, userMessage]);
+
+            // Send via WebSocket
+            const sent = wsSendMessage(
+                sessionId!,
+                message.trim(),
+                messageType === 'user',
+                messageType === 'client'
+            );
+
+            if (sent) {
+                setMessage('');
+            } else {
+                toast.error('Failed to send message. Please try again.');
+                // Remove optimistic message
+                setLocalMessages(prev => prev.slice(0, -1));
+            }
+        } else {
+            toast.error('Not connected to server. Please wait or reconnect.');
+        }
     };
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [session?.messages]);
+    }, [localMessages, isThinking]);
 
     if (isLoading) {
         return (
@@ -142,7 +289,7 @@ export const ConversationPage = () => {
                     animate={{ opacity: 1, y: 0 }}
                     className="card mb-6"
                 >
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between mb-4">
                         <div>
                             <h1 className="text-2xl font-bold text-[var(--text-primary)] mb-1">
                                 {session.title}
@@ -160,6 +307,13 @@ export const ConversationPage = () => {
                             {session.is_active ? 'Active' : 'Inactive'}
                         </span>
                     </div>
+
+                    {/* WebSocket Status Indicator */}
+                    <WebSocketStatusIndicator
+                        status={wsStatus}
+                        reconnectAttempts={reconnectAttempts}
+                        onReconnect={reconnect}
+                    />
                 </motion.div>
 
                 {/* Messages */}
@@ -216,7 +370,7 @@ export const ConversationPage = () => {
                                         </motion.div>
 
                                         {/* Agent Response or Typing Indicator */}
-                                        {msg.agent_response ? (
+                                        {(msg.agent_response || msg.backend_message_id) ? (
                                             <motion.div
                                                 initial={{ opacity: 0, x: -20 }}
                                                 animate={{ opacity: 1, x: 0 }}
@@ -234,36 +388,13 @@ export const ConversationPage = () => {
                                                     </div>
                                                     <div className="bg-[var(--bg-tertiary)] text-[var(--text-primary)] rounded-2xl rounded-tl-sm px-4 py-3">
                                                         <div className="markdown-content text-sm">
-                                                            <ReactMarkdown
-                                                                remarkPlugins={[remarkGfm]}
-                                                                components={{
-                                                                    p: ({ node, ...props }) => <p className="mb-2 last:mb-0" {...props} />,
-                                                                    ul: ({ node, ...props }) => <ul className="list-disc list-inside mb-2 space-y-1" {...props} />,
-                                                                    ol: ({ node, ...props }) => <ol className="list-decimal list-inside mb-2 space-y-1" {...props} />,
-                                                                    li: ({ node, ...props }) => <li className="ml-2" {...props} />,
-                                                                    strong: ({ node, ...props }) => <strong className="font-bold text-[var(--text-primary)]" {...props} />,
-                                                                    em: ({ node, ...props }) => <em className="italic" {...props} />,
-                                                                    code: ({ node, className, children, ...props }) => {
-                                                                        const match = /language-(\w+)/.exec(className || '');
-                                                                        return !match ? (
-                                                                            <code className="bg-[var(--bg-primary)] px-1.5 py-0.5 rounded text-xs font-mono" {...props}>
-                                                                                {children}
-                                                                            </code>
-                                                                        ) : (
-                                                                            <code className={`block bg-[var(--bg-primary)] p-3 rounded-lg text-xs font-mono overflow-x-auto my-2 ${className}`} {...props}>
-                                                                                {children}
-                                                                            </code>
-                                                                        );
-                                                                    },
-                                                                    h1: ({ node, ...props }) => <h1 className="text-lg font-bold mb-2 mt-3 first:mt-0" {...props} />,
-                                                                    h2: ({ node, ...props }) => <h2 className="text-base font-bold mb-2 mt-3 first:mt-0" {...props} />,
-                                                                    h3: ({ node, ...props }) => <h3 className="text-sm font-bold mb-1 mt-2 first:mt-0" {...props} />,
-                                                                    blockquote: ({ node, ...props }) => <blockquote className="border-l-4 border-[var(--accent-primary)] pl-3 italic my-2" {...props} />,
-                                                                    a: ({ node, ...props }) => <a className="text-[var(--accent-primary)] hover:underline" {...props} />,
-                                                                }}
-                                                            >
-                                                                {msg.agent_response}
+                                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                                {msg.agent_response || ''}
                                                             </ReactMarkdown>
+                                                            {/* Blinking cursor while streaming */}
+                                                            {msg.isStreaming && (
+                                                                <span className="inline-block ml-1 animate-pulse text-[var(--accent-primary)]">▋</span>
+                                                            )}
                                                         </div>
                                                         {msg.response_time_ms && (
                                                             <p className="text-xs text-[var(--text-secondary)] mt-2">
@@ -280,38 +411,48 @@ export const ConversationPage = () => {
                                                     )}
                                                 </div>
                                             </motion.div>
-                                        ) : (
-                                            <motion.div
-                                                initial={{ opacity: 0, y: 10 }}
-                                                animate={{ opacity: 1, y: 0 }}
-                                                className="flex items-center gap-2 mb-4"
-                                            >
-                                                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-purple-600 flex items-center justify-center">
-                                                    <Bot className="w-4 h-4 text-white" />
-                                                </div>
-                                                <div className="bg-[var(--bg-tertiary)] rounded-2xl px-4 py-3">
-                                                    <div className="flex gap-1">
-                                                        <motion.div
-                                                            animate={{ scale: [1, 1.2, 1] }}
-                                                            transition={{ repeat: Infinity, duration: 0.8, delay: 0 }}
-                                                            className="w-2 h-2 bg-[var(--text-secondary)] rounded-full"
-                                                        />
-                                                        <motion.div
-                                                            animate={{ scale: [1, 1.2, 1] }}
-                                                            transition={{ repeat: Infinity, duration: 0.8, delay: 0.2 }}
-                                                            className="w-2 h-2 bg-[var(--text-secondary)] rounded-full"
-                                                        />
-                                                        <motion.div
-                                                            animate={{ scale: [1, 1.2, 1] }}
-                                                            transition={{ repeat: Infinity, duration: 0.8, delay: 0.4 }}
-                                                            className="w-2 h-2 bg-[var(--text-secondary)] rounded-full"
-                                                        />
-                                                    </div>
-                                                </div>
-                                            </motion.div>
-                                        )}
+                                        ) : null}
                                     </div>
                                 ))}
+
+                                {/* Thinking Indicator */}
+                                {isThinking && (
+                                    <motion.div
+                                        initial={{ opacity: 0, y: 10 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: -10 }}
+                                        className="flex items-center gap-2 mb-4"
+                                    >
+                                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-purple-600 flex items-center justify-center">
+                                            <Bot className="w-4 h-4 text-white" />
+                                        </div>
+                                        <div className="bg-[var(--bg-tertiary)] rounded-2xl px-4 py-3">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-sm text-[var(--text-secondary)]">
+                                                    {thinkingMessage}
+                                                </span>
+                                                <div className="flex gap-1">
+                                                    <motion.div
+                                                        animate={{ scale: [1, 1.2, 1] }}
+                                                        transition={{ repeat: Infinity, duration: 0.8, delay: 0 }}
+                                                        className="w-2 h-2 bg-[var(--accent-primary)] rounded-full"
+                                                    />
+                                                    <motion.div
+                                                        animate={{ scale: [1, 1.2, 1] }}
+                                                        transition={{ repeat: Infinity, duration: 0.8, delay: 0.2 }}
+                                                        className="w-2 h-2 bg-[var(--accent-primary)] rounded-full"
+                                                    />
+                                                    <motion.div
+                                                        animate={{ scale: [1, 1.2, 1] }}
+                                                        transition={{ repeat: Infinity, duration: 0.8, delay: 0.4 }}
+                                                        className="w-2 h-2 bg-[var(--accent-primary)] rounded-full"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </motion.div>
+                                )}
+
                                 <div ref={messagesEndRef} />
                             </div>
                         ) : (
