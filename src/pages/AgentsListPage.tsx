@@ -6,14 +6,14 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Layout } from '@/components/Layout';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
-import agentService from '@/services/agent.service';
+import agentService, { Agent } from '@/services/agent.service';
 
 export const AgentsListPage = () => {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const [searchQuery, setSearchQuery] = useState('');
 
-    const { data: agentsData, isLoading, error, isError } = useQuery({
+    const { data: agentsData, isLoading, error, isError } = useQuery<{ results: Agent[] }>({
         queryKey: ['agents', searchQuery],
         queryFn: () => agentService.getAgents({ search: searchQuery }),
         retry: false,

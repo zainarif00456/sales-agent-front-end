@@ -42,7 +42,7 @@ export const CreateAgentPage = () => {
 
     const createMutation = useMutation({
         mutationFn: (data: AgentCreateData) => agentService.createAgent(data),
-        onSuccess: (response) => {
+        onSuccess: () => {
             toast.success('Agent created successfully!');
             navigate(`/agents`);
         },
