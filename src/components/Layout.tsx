@@ -12,7 +12,7 @@ export const Layout = ({ children }: LayoutProps) => {
         <div className="flex min-h-screen bg-[var(--bg-primary)]">
             <Sidebar collapsed={sidebarCollapsed} onToggle={setSidebarCollapsed} />
             <main
-                className="flex-1 p-8 transition-all duration-300"
+                className="flex-1 p-4 transition-all duration-300"
                 style={{
                     marginLeft: sidebarCollapsed ? '80px' : '256px'
                 }}

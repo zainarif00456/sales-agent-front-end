@@ -81,13 +81,13 @@ export const WebSocketStatusIndicator: React.FC<WebSocketStatusIndicatorProps> =
         <motion.div
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
-            className={`flex items-center gap-3 px-4 py-2 rounded-lg border ${config.bgColor} ${config.borderColor} ${className}`}
+            className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border ${config.bgColor} ${config.borderColor} ${className}`}
         >
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
                 <Icon
-                    className={`w-4 h-4 ${config.color} ${config.animate ? 'animate-spin' : ''}`}
+                    className={`w-3.5 h-3.5 ${config.color} ${config.animate ? 'animate-spin' : ''}`}
                 />
-                <span className={`text-sm font-medium ${config.color}`}>
+                <span className={`text-xs font-medium ${config.color}`}>
                     {config.text}
                 </span>
             </div>
@@ -101,7 +101,7 @@ export const WebSocketStatusIndicator: React.FC<WebSocketStatusIndicatorProps> =
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.95 }}
                         onClick={onReconnect}
-                        className="ml-auto px-3 py-1 text-xs font-semibold rounded-md bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-primary)]/90 transition-colors"
+                        className="ml-auto px-2 py-0.5 text-[10px] font-semibold rounded-md bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-primary)]/90 transition-colors"
                     >
                         Reconnect
                     </motion.button>
