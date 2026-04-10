@@ -66,7 +66,6 @@ export const ConversationPage = () => {
         enabled: !!session?.agent && !!token,
         onConnectionEstablished: (data) => {
             console.log('Connected to agent:', data.agent_name);
-            toast.success(`Connected to ${data.agent_name}`, { duration: 2000 });
         },
         onAgentThinking: (data) => {
             console.log('💭 Agent is thinking:', data.message);
@@ -237,7 +236,7 @@ export const ConversationPage = () => {
             return;
         }
 
-        // Otherwise, use WebSocket for streaming
+        // Use WebSocket for streaming when connected
         if (isConnected) {
             // Add user message optimistically
             const userMessage = {
@@ -261,12 +260,23 @@ export const ConversationPage = () => {
             if (sent) {
                 setMessage('');
             } else {
-                toast.error('Failed to send message. Please try again.');
-                // Remove optimistic message
+                // WebSocket send failed — fall back to REST API
                 setLocalMessages(prev => prev.slice(0, -1));
+                const messageData: SendMessageData = {
+                    message: message.trim(),
+                    is_user_query: messageType === 'user',
+                    is_client_query: messageType === 'client',
+                };
+                sendMessageMutation.mutate(messageData);
             }
         } else {
-            toast.error('Not connected to server. Please wait or reconnect.');
+            // WebSocket not connected — use REST API as fallback
+            const messageData: SendMessageData = {
+                message: message.trim(),
+                is_user_query: messageType === 'user',
+                is_client_query: messageType === 'client',
+            };
+            sendMessageMutation.mutate(messageData);
         }
     };
 

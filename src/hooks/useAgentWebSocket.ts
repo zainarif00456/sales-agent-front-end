@@ -64,7 +64,7 @@ export const useAgentWebSocket = ({
     const reconnectAttemptsRef = useRef(0);
     const isManualDisconnectRef = useRef(false);
 
-    const maxReconnectAttempts = 5;
+    const maxReconnectAttempts = 2;
     const baseReconnectDelay = 1000; // 1 second
     const maxReconnectDelay = 30000; // 30 seconds
 
