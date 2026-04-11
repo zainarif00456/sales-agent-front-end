@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -10,8 +10,9 @@ import { ClientProfileDisplay } from '@/components/ClientProfileDisplay';
 import { WebSocketStatusIndicator } from '@/components/WebSocketStatusIndicator';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { conversationService, SendMessageData } from '@/services/conversation.service';
+import { conversationService, SendMessageData, SendMessageResponse, ConversationSession, Message, SessionListResponse } from '@/services/conversation.service';
 import { useAgentWebSocket } from '@/hooks/useAgentWebSocket';
+import { fileToDataUrl } from '@/lib/attachments';
 
 const ALLOWED_TYPES: Record<string, string[]> = {
     'application/pdf': ['.pdf'],
@@ -22,6 +23,23 @@ const ALLOWED_TYPES: Record<string, string[]> = {
 };
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+type ConversationMessage = Message & {
+    backend_message_id?: string;
+    client_message_id?: string;
+    isStreaming?: boolean;
+    isPending?: boolean;
+};
+
+type PendingSendContext = {
+    clientMessageId: string;
+    draftMessage: string;
+    draftFile: File | null;
+};
+
+type PendingSendMessageData = SendMessageData & {
+    client_message_id: string;
+};
 
 const formatFileSize = (bytes: number): string => {
     if (bytes < 1024) return bytes + ' B';
@@ -35,12 +53,14 @@ export const ConversationPage = () => {
     const queryClient = useQueryClient();
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const loadedSessionIdRef = useRef<string | undefined>(undefined);
 
     const [message, setMessage] = useState('');
     const [messageType, setMessageType] = useState<'user' | 'client'>('user');
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [isThinking, setIsThinking] = useState(false);
     const [thinkingMessage, setThinkingMessage] = useState('');
+    const [sessionTitle, setSessionTitle] = useState('');
 
     // Get auth token for WebSocket
     const token = localStorage.getItem('access_token') || '';
@@ -51,7 +71,126 @@ export const ConversationPage = () => {
         enabled: !!sessionId,
     });
 
-    const [localMessages, setLocalMessages] = useState<any[]>([]);
+    const [localMessages, setLocalMessages] = useState<ConversationMessage[]>([]);
+
+    const syncSessionTitle = useCallback((nextTitle?: string) => {
+        if (!sessionId || !nextTitle) {
+            return;
+        }
+
+        setSessionTitle(nextTitle);
+
+        queryClient.setQueryData<ConversationSession | undefined>(['conversation', sessionId], (current) => {
+            if (!current) {
+                return current;
+            }
+
+            return {
+                ...current,
+                title: nextTitle,
+            };
+        });
+
+        queryClient.setQueryData<SessionListResponse | undefined>(['conversations'], (current) => {
+            if (!current) {
+                return current;
+            }
+
+            return {
+                ...current,
+                results: current.results.map((item) => (
+                    item.id === sessionId
+                        ? { ...item, title: nextTitle }
+                        : item
+                )),
+            };
+        });
+    }, [queryClient, sessionId]);
+
+    const markPendingMessageAsStreaming = useCallback((backendMessageId: string) => {
+        setLocalMessages((prev) => {
+            const pendingIndex = prev.findIndex((msg) => msg.isPending && !msg.backend_message_id);
+
+            if (pendingIndex < 0) {
+                return prev;
+            }
+
+            const updated = [...prev];
+            updated[pendingIndex] = {
+                ...updated[pendingIndex],
+                backend_message_id: backendMessageId,
+                isPending: false,
+                isStreaming: true,
+                agent_response: updated[pendingIndex].agent_response || '',
+            };
+
+            return updated;
+        });
+    }, []);
+
+    const updateStreamedMessage = useCallback((backendMessageId: string, chunk: string) => {
+        setLocalMessages((prev) => {
+            const messageIndex = prev.findIndex((msg) => msg.backend_message_id === backendMessageId);
+
+            if (messageIndex < 0) {
+                return prev;
+            }
+
+            const updated = [...prev];
+            updated[messageIndex] = {
+                ...updated[messageIndex],
+                agent_response: `${updated[messageIndex].agent_response || ''}${chunk}`,
+                isStreaming: true,
+            };
+
+            return updated;
+        });
+    }, []);
+
+    const completeStreamedMessage = useCallback((backendMessageId: string, fullResponse?: string, responseTimeMs?: number) => {
+        setLocalMessages((prev) => {
+            const messageIndex = prev.findIndex((msg) => msg.backend_message_id === backendMessageId);
+
+            if (messageIndex < 0) {
+                return prev;
+            }
+
+            const updated = [...prev];
+            updated[messageIndex] = {
+                ...updated[messageIndex],
+                agent_response: fullResponse ?? updated[messageIndex].agent_response,
+                response_time_ms: responseTimeMs ?? updated[messageIndex].response_time_ms,
+                isStreaming: false,
+                isPending: false,
+            };
+
+            return updated;
+        });
+    }, []);
+
+    const replaceOptimisticMessage = useCallback((clientMessageId: string, response: ConversationMessage) => {
+        setLocalMessages((prev) => {
+            const messageIndex = prev.findIndex((msg) => msg.client_message_id === clientMessageId || msg.id === clientMessageId);
+
+            if (messageIndex < 0) {
+                return [...prev, response];
+            }
+
+            const updated = [...prev];
+            updated[messageIndex] = {
+                ...response,
+                client_message_id: clientMessageId,
+                isPending: false,
+                isStreaming: false,
+            };
+
+            return updated;
+        });
+    }, []);
+
+    const restoreOptimisticDraft = useCallback((clientMessageId: string) => {
+        setLocalMessages((prev) => prev.filter((msg) => msg.client_message_id !== clientMessageId && msg.id !== clientMessageId));
+    }, []);
 
     // WebSocket hook
     const {
@@ -60,6 +199,7 @@ export const ConversationPage = () => {
         sendMessage: wsSendMessage,
         reconnect,
         reconnectAttempts,
+        maxReconnectAttempts,
     } = useAgentWebSocket({
         agentId: session?.agent || '',
         token,
@@ -75,80 +215,29 @@ export const ConversationPage = () => {
         onStreamStart: (data) => {
             console.log('🌊 Stream started for message:', data.message_id);
             setIsThinking(false);
-
-            // Add the backend_message_id to the last user message so we can associate streaming chunks with it
-            setLocalMessages(prev => {
-                const lastIdx = prev.length - 1;
-                if (lastIdx >= 0 && prev[lastIdx].user_message && !prev[lastIdx].backend_message_id) {
-                    const updated = [...prev];
-                    updated[lastIdx] = {
-                        ...updated[lastIdx],
-                        backend_message_id: data.message_id,
-                        agent_response: '', // Initialize empty agent response for streaming
-                        isStreaming: true,
-                    };
-                    return updated;
-                }
-                return prev;
-            });
+            markPendingMessageAsStreaming(data.message_id);
         },
         onAgentStreaming: (data) => {
             console.log('📝 Streaming chunk:', data.chunk);
-
-            setLocalMessages((prev) => {
-                // Find the message with this backend_message_id
-                const msgIndex = prev.findIndex(
-                    (msg) => msg.backend_message_id === data.message_id
-                );
-
-                if (msgIndex >= 0) {
-                    // Update existing message by APPENDING the chunk
-                    const updated = [...prev];
-                    updated[msgIndex] = {
-                        ...updated[msgIndex],
-                        agent_response: (updated[msgIndex].agent_response || '') + data.chunk,
-                        isStreaming: true,
-                    };
-                    return updated;
-                } else {
-                    // This shouldn't happen if stream_start worked correctly
-                    // But as a fallback, find the last user message and update it
-                    const lastUserMsgIndex = prev.length - 1;
-                    if (lastUserMsgIndex >= 0) {
-                        const updated = [...prev];
-                        updated[lastUserMsgIndex] = {
-                            ...updated[lastUserMsgIndex],
-                            backend_message_id: data.message_id,
-                            agent_response: (updated[lastUserMsgIndex].agent_response || '') + data.chunk,
-                            isStreaming: true,
-                        };
-                        return updated;
-                    }
-                    return prev;
-                }
-            });
+            updateStreamedMessage(data.message_id, data.chunk);
         },
         onAgentComplete: (data) => {
             console.log('✅ Stream complete:', data.message_id);
 
             setIsThinking(false);
 
-            // Mark message as complete (stop showing cursor)
-            setLocalMessages((prev) =>
-                prev.map((msg) =>
-                    msg.backend_message_id === data.message_id
-                        ? {
-                            ...msg,
-                            isStreaming: false,
-                            agent_response: data.full_response,
-                            response_time_ms: data.response_time_ms,
-                        }
-                        : msg
-                )
-            );
+            completeStreamedMessage(data.message_id, data.full_response, data.response_time_ms);
 
-            // Invalidate query to get fresh data
+            if (data.session_title) {
+                syncSessionTitle(data.session_title);
+            }
+
             queryClient.invalidateQueries({ queryKey: ['conversation', sessionId] });
+        },
+        onSessionTitleUpdated: (data) => {
+            if (data?.title) {
+                syncSessionTitle(data.title);
+            }
         },
         onError: (data) => {
             setIsThinking(false);
@@ -157,44 +246,89 @@ export const ConversationPage = () => {
     });
 
     useEffect(() => {
-        if (session?.messages) {
-            setLocalMessages(session.messages);
+        if (!session) {
+            return;
         }
-    }, [session?.messages]);
+
+        if (sessionId && loadedSessionIdRef.current !== sessionId) {
+            loadedSessionIdRef.current = sessionId;
+            setSessionTitle(session.title || '');
+            setLocalMessages((session.messages || []) as ConversationMessage[]);
+            return;
+        }
+
+        if (!sessionTitle && session.title) {
+            setSessionTitle(session.title);
+        }
+
+        if (session.messages) {
+            setLocalMessages((prev) => {
+                const nextMessages = [...prev];
+
+                for (const serverMessage of session.messages as ConversationMessage[]) {
+                    const matchIndex = nextMessages.findIndex((message) => (
+                        message.id === serverMessage.id ||
+                        message.backend_message_id === serverMessage.id ||
+                        message.client_message_id === (serverMessage as ConversationMessage).client_message_id
+                    ));
+
+                    if (matchIndex >= 0) {
+                        nextMessages[matchIndex] = {
+                            ...nextMessages[matchIndex],
+                            ...serverMessage,
+                            isPending: false,
+                            isStreaming: false,
+                        };
+                    } else {
+                        nextMessages.push(serverMessage);
+                    }
+                }
+
+                return nextMessages;
+            });
+        }
+    }, [session, sessionId, sessionTitle]);
 
     // Fallback mutation for file uploads (WebSocket doesn't support file uploads)
-    const sendMessageMutation = useMutation({
-        mutationFn: (data: SendMessageData) =>
+    const sendMessageMutation = useMutation<SendMessageResponse, Error, PendingSendMessageData, { draft: PendingSendContext }>({
+        mutationFn: (data: PendingSendMessageData) =>
             conversationService.sendMessage(sessionId!, data),
-        onMutate: async (newMessage: SendMessageData) => {
+        onMutate: async (newMessage: PendingSendMessageData) => {
             await queryClient.cancelQueries({ queryKey: ['conversation', sessionId] });
 
-            const previousSession = queryClient.getQueryData(['conversation', sessionId]);
-
             // Optimistically add user message
-            const optimisticMessage = {
-                id: Date.now().toString(),
+            const optimisticMessage: ConversationMessage = {
+                id: newMessage.client_message_id,
                 user_message: newMessage.message,
                 is_user_query: newMessage.is_user_query,
                 is_client_query: newMessage.is_client_query,
                 attachment_file: newMessage.attachment_file ? 'uploading...' : undefined,
                 agent_response: '', // Empty initially
                 created_at: new Date().toISOString(),
+                message_type: newMessage.is_client_query ? 'client_message' : (newMessage.is_user_query ? 'user_query' : 'general'),
+                client_message_id: newMessage.client_message_id,
+                isPending: true,
             };
 
             setLocalMessages(prev => [...prev, optimisticMessage]);
             setMessage('');
             setSelectedFile(null);
 
-            return { previousSession };
+            return {
+                draft: {
+                    clientMessageId: newMessage.client_message_id,
+                    draftMessage: newMessage.message,
+                    draftFile: newMessage.attachment_file || null,
+                },
+            };
         },
-        onSuccess: (response: any) => {
+        onSuccess: (response, variables) => {
             // Update with real response
-            setLocalMessages(prev => {
-                const newMessages = [...prev];
-                // Replace the last message (optimistic) with the real one
-                newMessages[newMessages.length - 1] = response.data;
-                return newMessages;
+            replaceOptimisticMessage(variables.client_message_id, {
+                ...response.data,
+                client_message_id: variables.client_message_id,
+                isPending: false,
+                isStreaming: false,
             });
 
             // Show success toast for client profile extraction
@@ -206,78 +340,84 @@ export const ConversationPage = () => {
                 });
             }
 
+            if (response.session_title) {
+                syncSessionTitle(response.session_title);
+            }
+
             queryClient.invalidateQueries({ queryKey: ['conversation', sessionId] });
         },
-        onError: (_err: any, _newTodo: any, context: any) => {
+        onError: (_err, _variables, context) => {
             toast.error('Failed to send message');
-            setSelectedFile(null); // Clear file on error
-            if (context?.previousSession) {
-                queryClient.setQueryData(['conversation', sessionId], context.previousSession);
-            }
+            restoreOptimisticDraft(_variables.client_message_id);
+            setMessage(context?.draft?.draftMessage || '');
+            setSelectedFile(context?.draft?.draftFile || null);
         },
     });
 
-    const handleSendMessage = (e: React.FormEvent) => {
+    const handleSendMessage = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!message.trim() && !selectedFile) {
             toast.error('Please enter a message or attach a file');
             return;
         }
 
-        // If there's a file attachment, use REST API
-        if (selectedFile) {
-            const messageData: SendMessageData = {
-                message: message.trim() || 'Uploaded document',
-                is_user_query: messageType === 'user',
-                is_client_query: messageType === 'client',
-                attachment_file: selectedFile,
-            };
-            sendMessageMutation.mutate(messageData);
-            return;
-        }
+        const draftMessage = message.trim() || 'Uploaded document';
+        const clientMessageId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const messagePayload: PendingSendMessageData = {
+            client_message_id: clientMessageId,
+            message: draftMessage,
+            is_user_query: messageType === 'user',
+            is_client_query: messageType === 'client',
+            attachment_file: selectedFile || undefined,
+        };
 
-        // Use WebSocket for streaming when connected
         if (isConnected) {
             // Add user message optimistically
-            const userMessage = {
-                id: `user-${Date.now()}`,
-                user_message: message.trim(),
+            const userMessage: ConversationMessage = {
+                id: clientMessageId,
+                user_message: draftMessage,
                 is_user_query: messageType === 'user',
                 is_client_query: messageType === 'client',
                 agent_response: '',
                 created_at: new Date().toISOString(),
+                message_type: messageType === 'client' ? 'client_message' : 'user_query',
+                client_message_id: clientMessageId,
+                isPending: true,
             };
             setLocalMessages(prev => [...prev, userMessage]);
 
-            // Send via WebSocket
-            const sent = wsSendMessage(
-                sessionId!,
-                message.trim(),
-                messageType === 'user',
-                messageType === 'client'
-            );
+            try {
+                let attachmentBase64: string | undefined;
 
-            if (sent) {
-                setMessage('');
-            } else {
-                // WebSocket send failed — fall back to REST API
-                setLocalMessages(prev => prev.slice(0, -1));
-                const messageData: SendMessageData = {
-                    message: message.trim(),
-                    is_user_query: messageType === 'user',
-                    is_client_query: messageType === 'client',
-                };
-                sendMessageMutation.mutate(messageData);
+                if (selectedFile) {
+                    attachmentBase64 = await fileToDataUrl(selectedFile);
+                }
+
+                const sent = wsSendMessage({
+                    sessionId: sessionId!,
+                    message: draftMessage,
+                    isUserQuery: messageType === 'user',
+                    isClientQuery: messageType === 'client',
+                    attachmentBase64,
+                    attachmentName: selectedFile?.name,
+                    attachmentMimeType: selectedFile?.type,
+                });
+
+                if (sent) {
+                    setMessage('');
+                    setSelectedFile(null);
+                    return;
+                }
+            } catch (error) {
+                console.warn('[Conversation] WebSocket attachment encoding failed, falling back to REST.', error);
             }
-        } else {
-            // WebSocket not connected — use REST API as fallback
-            const messageData: SendMessageData = {
-                message: message.trim(),
-                is_user_query: messageType === 'user',
-                is_client_query: messageType === 'client',
-            };
-            sendMessageMutation.mutate(messageData);
+
+            restoreOptimisticDraft(clientMessageId);
+            sendMessageMutation.mutate(messagePayload);
+            return;
         }
+
+        sendMessageMutation.mutate(messagePayload);
     };
 
     useEffect(() => {
@@ -352,7 +492,7 @@ export const ConversationPage = () => {
                             </div>
                             <div>
                                 <h1 className="text-base font-semibold text-[var(--text-primary)] leading-tight">
-                                    {session.title}
+                                    {sessionTitle || session.title}
                                 </h1>
                                 <p className="text-xs text-[var(--text-secondary)]">
                                     {session.agent_details.name} • {session.agent_details.role}
@@ -363,6 +503,7 @@ export const ConversationPage = () => {
                             <WebSocketStatusIndicator
                                 status={wsStatus}
                                 reconnectAttempts={reconnectAttempts}
+                                maxReconnectAttempts={maxReconnectAttempts}
                                 onReconnect={reconnect}
                             />
                             <span
@@ -430,6 +571,14 @@ export const ConversationPage = () => {
                                                     {msg.client_profile_data && Object.keys(msg.client_profile_data).length > 0 && (
                                                         <div className="mt-2 text-xs bg-green-500/20 border border-green-500/30 rounded-lg px-2.5 py-1">
                                                             ✅ Client profile extracted: {msg.client_profile_data.name || 'Unknown'}
+                                                        </div>
+                                                    )}
+
+                                                    {/* Sending State */}
+                                                    {msg.isPending && !msg.backend_message_id && (
+                                                        <div className="mt-2 inline-flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide bg-white/15 rounded-full px-2.5 py-1">
+                                                            <Loader2 className="w-3 h-3 animate-spin" />
+                                                            Sending...
                                                         </div>
                                                     )}
                                                 </div>

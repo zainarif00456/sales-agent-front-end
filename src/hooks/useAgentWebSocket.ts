@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { API_BASE_URL } from '@/lib/axios';
 
 /**
  * WebSocket message structure from backend
@@ -21,6 +22,7 @@ interface UseAgentWebSocketProps {
     onStreamStart?: (data: any) => void;
     onAgentStreaming?: (data: any) => void;
     onAgentComplete?: (data: any) => void;
+    onSessionTitleUpdated?: (data: any) => void;
     onError?: (data: any) => void;
 }
 
@@ -54,6 +56,7 @@ export const useAgentWebSocket = ({
     onStreamStart,
     onAgentStreaming,
     onAgentComplete,
+    onSessionTitleUpdated,
     onError,
 }: UseAgentWebSocketProps) => {
     const [status, setStatus] = useState<WebSocketStatus>(WebSocketStatus.DISCONNECTED);
@@ -87,6 +90,7 @@ export const useAgentWebSocket = ({
         onStreamStart,
         onAgentStreaming,
         onAgentComplete,
+        onSessionTitleUpdated,
         onError,
     });
 
@@ -98,9 +102,17 @@ export const useAgentWebSocket = ({
             onStreamStart,
             onAgentStreaming,
             onAgentComplete,
+            onSessionTitleUpdated,
             onError,
         };
-    }, [onConnectionEstablished, onAgentThinking, onStreamStart, onAgentStreaming, onAgentComplete, onError]);
+    }, [onConnectionEstablished, onAgentThinking, onStreamStart, onAgentStreaming, onAgentComplete, onSessionTitleUpdated, onError]);
+
+    const getWebSocketBaseUrl = useCallback((): string => {
+        const resolvedApiBase = new URL(API_BASE_URL, window.location.origin);
+        const protocol = resolvedApiBase.protocol === 'https:' ? 'wss:' : 'ws:';
+
+        return `${protocol}//${resolvedApiBase.host}`;
+    }, []);
 
     /**
      * Establish WebSocket connection
@@ -130,9 +142,7 @@ export const useAgentWebSocket = ({
         );
 
         try {
-            // Determine protocol based on current page protocol
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.hostname}:8000/ws/chat/${agentId}/?token=${token}`;
+            const wsUrl = `${getWebSocketBaseUrl()}/ws/chat/${agentId}/?token=${token}`;
 
             console.log(`[WebSocket] Connecting to ${wsUrl} (attempt ${reconnectAttemptsRef.current + 1})`);
 
@@ -166,6 +176,9 @@ export const useAgentWebSocket = ({
                             break;
                         case 'agent_complete':
                             callbacksRef.current.onAgentComplete?.(message.data);
+                            break;
+                        case 'session_title_updated':
+                            callbacksRef.current.onSessionTitleUpdated?.(message.data);
                             break;
                         case 'error':
                             console.error('[WebSocket] Server error:', message.data);
@@ -222,7 +235,7 @@ export const useAgentWebSocket = ({
             console.error('[WebSocket] Error creating WebSocket:', error);
             setStatus(WebSocketStatus.ERROR);
         }
-    }, [agentId, token, enabled, getReconnectDelay]);
+    }, [agentId, token, enabled, getReconnectDelay, getWebSocketBaseUrl]);
 
     /**
      * Disconnect WebSocket connection
@@ -248,12 +261,15 @@ export const useAgentWebSocket = ({
     /**
      * Send a message through WebSocket
      */
-    const sendMessage = useCallback((
-        sessionId: string,
-        message: string,
-        isUserQuery: boolean = false,
-        isClientQuery: boolean = false
-    ): boolean => {
+    const sendMessage = useCallback((options: {
+        sessionId: string;
+        message: string;
+        isUserQuery?: boolean;
+        isClientQuery?: boolean;
+        attachmentBase64?: string;
+        attachmentName?: string;
+        attachmentMimeType?: string;
+    }): boolean => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
             console.error('[WebSocket] Cannot send message: not connected');
             return false;
@@ -261,10 +277,15 @@ export const useAgentWebSocket = ({
 
         const payload = {
             action: 'send_message',
-            session_id: sessionId,
-            message,
-            is_user_query: isUserQuery,
-            is_client_query: isClientQuery,
+            session_id: options.sessionId,
+            message: options.message,
+            is_user_query: options.isUserQuery ?? false,
+            is_client_query: options.isClientQuery ?? false,
+            ...(options.attachmentBase64 ? {
+                attachment_base64: options.attachmentBase64,
+                attachment_name: options.attachmentName,
+                attachment_mime_type: options.attachmentMimeType,
+            } : {}),
         };
 
         try {
@@ -327,6 +348,7 @@ export const useAgentWebSocket = ({
         isConnecting: status === WebSocketStatus.CONNECTING || status === WebSocketStatus.RECONNECTING,
         isError: status === WebSocketStatus.ERROR,
         reconnectAttempts,
+        maxReconnectAttempts,
         sendMessage,
         disconnect,
         reconnect,

@@ -5,6 +5,7 @@ import { WebSocketStatus } from '@/hooks/useAgentWebSocket';
 interface WebSocketStatusIndicatorProps {
     status: WebSocketStatus;
     reconnectAttempts?: number;
+    maxReconnectAttempts?: number;
     onReconnect?: () => void;
     className?: string;
 }
@@ -18,6 +19,7 @@ interface WebSocketStatusIndicatorProps {
 export const WebSocketStatusIndicator: React.FC<WebSocketStatusIndicatorProps> = ({
     status,
     reconnectAttempts = 0,
+    maxReconnectAttempts = 2,
     onReconnect,
     className = '',
 }) => {
@@ -45,7 +47,7 @@ export const WebSocketStatusIndicator: React.FC<WebSocketStatusIndicatorProps> =
             case WebSocketStatus.RECONNECTING:
                 return {
                     icon: Loader2,
-                    text: `Reconnecting... (${reconnectAttempts}/5)`,
+                    text: `Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})`,
                     color: 'text-yellow-500',
                     bgColor: 'bg-yellow-500/10',
                     borderColor: 'border-yellow-500/20',

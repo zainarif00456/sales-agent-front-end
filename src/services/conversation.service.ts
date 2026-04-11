@@ -67,12 +67,14 @@ export interface SendMessageData {
     is_user_query?: boolean;
     is_client_query?: boolean;
     attachment_file?: File;
+    client_message_id?: string;
 }
 
 export interface SendMessageResponse {
     success: boolean;
     message: string;
     client_profile_extracted?: boolean;
+    session_title?: string;
     data: Message;
 }
 
@@ -135,6 +137,7 @@ export const conversationService = {
                 message: messageData.message,
                 is_user_query: messageData.is_user_query,
                 is_client_query: messageData.is_client_query,
+                client_message_id: messageData.client_message_id,
             }
         );
         return data;
