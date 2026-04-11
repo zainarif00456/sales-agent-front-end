@@ -52,8 +52,11 @@ export const ConversationPage = () => {
     // const [searchParams] = useSearchParams();
     const queryClient = useQueryClient();
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const messagesContainerRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const loadedSessionIdRef = useRef<string | undefined>(undefined);
+    const shouldAutoScrollRef = useRef(true);
+    const forceScrollRef = useRef(false);
 
     const [message, setMessage] = useState('');
     const [messageType, setMessageType] = useState<'user' | 'client'>('user');
@@ -231,8 +234,6 @@ export const ConversationPage = () => {
             if (data.session_title) {
                 syncSessionTitle(data.session_title);
             }
-
-            queryClient.invalidateQueries({ queryKey: ['conversation', sessionId] });
         },
         onSessionTitleUpdated: (data) => {
             if (data?.title) {
@@ -261,33 +262,10 @@ export const ConversationPage = () => {
             setSessionTitle(session.title);
         }
 
-        if (session.messages) {
-            setLocalMessages((prev) => {
-                const nextMessages = [...prev];
-
-                for (const serverMessage of session.messages as ConversationMessage[]) {
-                    const matchIndex = nextMessages.findIndex((message) => (
-                        message.id === serverMessage.id ||
-                        message.backend_message_id === serverMessage.id ||
-                        message.client_message_id === (serverMessage as ConversationMessage).client_message_id
-                    ));
-
-                    if (matchIndex >= 0) {
-                        nextMessages[matchIndex] = {
-                            ...nextMessages[matchIndex],
-                            ...serverMessage,
-                            isPending: false,
-                            isStreaming: false,
-                        };
-                    } else {
-                        nextMessages.push(serverMessage);
-                    }
-                }
-
-                return nextMessages;
-            });
+        if (session.messages && localMessages.length === 0) {
+            setLocalMessages(session.messages as ConversationMessage[]);
         }
-    }, [session, sessionId, sessionTitle]);
+    }, [session, sessionId, sessionTitle, localMessages.length]);
 
     // Fallback mutation for file uploads (WebSocket doesn't support file uploads)
     const sendMessageMutation = useMutation<SendMessageResponse, Error, PendingSendMessageData, { draft: PendingSendContext }>({
@@ -343,8 +321,6 @@ export const ConversationPage = () => {
             if (response.session_title) {
                 syncSessionTitle(response.session_title);
             }
-
-            queryClient.invalidateQueries({ queryKey: ['conversation', sessionId] });
         },
         onError: (_err, _variables, context) => {
             toast.error('Failed to send message');
@@ -406,6 +382,7 @@ export const ConversationPage = () => {
                 if (sent) {
                     setMessage('');
                     setSelectedFile(null);
+                    forceScrollRef.current = true;
                     return;
                 }
             } catch (error) {
@@ -414,15 +391,35 @@ export const ConversationPage = () => {
 
             restoreOptimisticDraft(clientMessageId);
             sendMessageMutation.mutate(messagePayload);
+            forceScrollRef.current = true;
             return;
         }
 
         sendMessageMutation.mutate(messagePayload);
+        forceScrollRef.current = true;
     };
 
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        if (!messagesEndRef.current) {
+            return;
+        }
+
+        if (forceScrollRef.current || shouldAutoScrollRef.current) {
+            messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            forceScrollRef.current = false;
+        }
     }, [localMessages, isThinking]);
+
+    const handleMessagesScroll = () => {
+        const container = messagesContainerRef.current;
+
+        if (!container) {
+            return;
+        }
+
+        const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+        shouldAutoScrollRef.current = distanceFromBottom < 120;
+    };
 
     if (isLoading) {
         return (
@@ -519,7 +516,11 @@ export const ConversationPage = () => {
                 </motion.div>
 
                 {/* Messages Area — takes all remaining space */}
-                <div className="flex-1 min-h-0 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-5 overflow-y-auto scrollbar-hide mb-3 shadow-sm">
+                <div
+                    ref={messagesContainerRef}
+                    onScroll={handleMessagesScroll}
+                    className="flex-1 min-h-0 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-5 overflow-y-auto scrollbar-hide mb-3 shadow-sm"
+                >
                     <AnimatePresence>
                         {localMessages.length > 0 ? (
                             <div className="space-y-5">
