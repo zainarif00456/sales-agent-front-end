@@ -11,7 +11,7 @@ import { WebSocketStatusIndicator } from '@/components/WebSocketStatusIndicator'
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { conversationService, SendMessageData, SendMessageResponse, ConversationSession, Message, SessionListResponse } from '@/services/conversation.service';
-import { useAgentWebSocket } from '@/hooks/useAgentWebSocket';
+import { useAgentWebSocket, WebSocketStatus } from '@/hooks/useAgentWebSocket';
 import { fileToDataUrl } from '@/lib/attachments';
 
 const ALLOWED_TYPES: Record<string, string[]> = {
@@ -76,6 +76,26 @@ export const ConversationPage = () => {
 
     const [localMessages, setLocalMessages] = useState<ConversationMessage[]>([]);
 
+    const getSocketMessageId = useCallback((data: any): string | undefined => {
+        return data?.message_id || data?.messageId || data?.id;
+    }, []);
+
+    const getSocketChunk = useCallback((data: any): string => {
+        return data?.chunk || data?.content || data?.text || '';
+    }, []);
+
+    const getSocketFullResponse = useCallback((data: any): string | undefined => {
+        return data?.full_response || data?.fullResponse || data?.response || data?.final_response;
+    }, []);
+
+    const getSocketResponseTime = useCallback((data: any): number | undefined => {
+        return data?.response_time_ms ?? data?.responseTimeMs;
+    }, []);
+
+    const getSocketSessionTitle = useCallback((data: any): string | undefined => {
+        return data?.session_title || data?.sessionTitle || data?.title;
+    }, []);
+
     const syncSessionTitle = useCallback((nextTitle?: string) => {
         if (!sessionId || !nextTitle) {
             return;
@@ -110,7 +130,7 @@ export const ConversationPage = () => {
         });
     }, [queryClient, sessionId]);
 
-    const markPendingMessageAsStreaming = useCallback((backendMessageId: string) => {
+    const markPendingMessageAsStreaming = useCallback((backendMessageId?: string) => {
         setLocalMessages((prev) => {
             const pendingIndex = prev.findIndex((msg) => msg.isPending && !msg.backend_message_id);
 
@@ -121,7 +141,7 @@ export const ConversationPage = () => {
             const updated = [...prev];
             updated[pendingIndex] = {
                 ...updated[pendingIndex],
-                backend_message_id: backendMessageId,
+                backend_message_id: backendMessageId || updated[pendingIndex].backend_message_id,
                 isPending: false,
                 isStreaming: true,
                 agent_response: updated[pendingIndex].agent_response || '',
@@ -131,9 +151,19 @@ export const ConversationPage = () => {
         });
     }, []);
 
-    const updateStreamedMessage = useCallback((backendMessageId: string, chunk: string) => {
+    const updateStreamedMessage = useCallback((backendMessageId: string | undefined, chunk: string) => {
+        if (!chunk) {
+            return;
+        }
+
         setLocalMessages((prev) => {
-            const messageIndex = prev.findIndex((msg) => msg.backend_message_id === backendMessageId);
+            let messageIndex = backendMessageId
+                ? prev.findIndex((msg) => msg.backend_message_id === backendMessageId)
+                : -1;
+
+            if (messageIndex < 0) {
+                messageIndex = prev.findIndex((msg) => msg.isPending || msg.isStreaming);
+            }
 
             if (messageIndex < 0) {
                 return prev;
@@ -142,7 +172,9 @@ export const ConversationPage = () => {
             const updated = [...prev];
             updated[messageIndex] = {
                 ...updated[messageIndex],
+                backend_message_id: backendMessageId || updated[messageIndex].backend_message_id,
                 agent_response: `${updated[messageIndex].agent_response || ''}${chunk}`,
+                isPending: false,
                 isStreaming: true,
             };
 
@@ -150,9 +182,15 @@ export const ConversationPage = () => {
         });
     }, []);
 
-    const completeStreamedMessage = useCallback((backendMessageId: string, fullResponse?: string, responseTimeMs?: number) => {
+    const completeStreamedMessage = useCallback((backendMessageId: string | undefined, fullResponse?: string, responseTimeMs?: number) => {
         setLocalMessages((prev) => {
-            const messageIndex = prev.findIndex((msg) => msg.backend_message_id === backendMessageId);
+            let messageIndex = backendMessageId
+                ? prev.findIndex((msg) => msg.backend_message_id === backendMessageId)
+                : -1;
+
+            if (messageIndex < 0) {
+                messageIndex = prev.findIndex((msg) => msg.isPending || msg.isStreaming);
+            }
 
             if (messageIndex < 0) {
                 return prev;
@@ -161,6 +199,7 @@ export const ConversationPage = () => {
             const updated = [...prev];
             updated[messageIndex] = {
                 ...updated[messageIndex],
+                backend_message_id: backendMessageId || updated[messageIndex].backend_message_id,
                 agent_response: fullResponse ?? updated[messageIndex].agent_response,
                 response_time_ms: responseTimeMs ?? updated[messageIndex].response_time_ms,
                 isStreaming: false,
@@ -216,28 +255,37 @@ export const ConversationPage = () => {
             setThinkingMessage(data.message || 'Thinking...');
         },
         onStreamStart: (data) => {
-            console.log('🌊 Stream started for message:', data.message_id);
+            const messageId = getSocketMessageId(data);
+            console.log('🌊 Stream started for message:', messageId);
             setIsThinking(false);
-            markPendingMessageAsStreaming(data.message_id);
+            markPendingMessageAsStreaming(messageId);
         },
         onAgentStreaming: (data) => {
-            console.log('📝 Streaming chunk:', data.chunk);
-            updateStreamedMessage(data.message_id, data.chunk);
+            const messageId = getSocketMessageId(data);
+            const chunk = getSocketChunk(data);
+            console.log('📝 Streaming chunk:', chunk);
+            updateStreamedMessage(messageId, chunk);
         },
         onAgentComplete: (data) => {
-            console.log('✅ Stream complete:', data.message_id);
+            const messageId = getSocketMessageId(data);
+            const fullResponse = getSocketFullResponse(data);
+            const responseTimeMs = getSocketResponseTime(data);
+            const nextTitle = getSocketSessionTitle(data);
+
+            console.log('✅ Stream complete:', messageId);
 
             setIsThinking(false);
 
-            completeStreamedMessage(data.message_id, data.full_response, data.response_time_ms);
+            completeStreamedMessage(messageId, fullResponse, responseTimeMs);
 
-            if (data.session_title) {
-                syncSessionTitle(data.session_title);
+            if (nextTitle) {
+                syncSessionTitle(nextTitle);
             }
         },
         onSessionTitleUpdated: (data) => {
-            if (data?.title) {
-                syncSessionTitle(data.title);
+            const nextTitle = getSocketSessionTitle(data);
+            if (nextTitle) {
+                syncSessionTitle(nextTitle);
             }
         },
         onError: (data) => {
@@ -267,7 +315,7 @@ export const ConversationPage = () => {
         }
     }, [session, sessionId, sessionTitle, localMessages.length]);
 
-    // Fallback mutation for file uploads (WebSocket doesn't support file uploads)
+    // Fallback REST path when WebSocket is unavailable
     const sendMessageMutation = useMutation<SendMessageResponse, Error, PendingSendMessageData, { draft: PendingSendContext }>({
         mutationFn: (data: PendingSendMessageData) =>
             conversationService.sendMessage(sessionId!, data),
@@ -386,17 +434,31 @@ export const ConversationPage = () => {
                     return;
                 }
             } catch (error) {
-                console.warn('[Conversation] WebSocket attachment encoding failed, falling back to REST.', error);
+                console.error('[Conversation] Failed to prepare/send WebSocket payload.', error);
             }
 
             restoreOptimisticDraft(clientMessageId);
+
+            // Strict routing rule:
+            // - Use REST only when socket is not connected
+            // - Never dual-dispatch when socket is connected
+            if (wsStatus === WebSocketStatus.DISCONNECTED || wsStatus === WebSocketStatus.ERROR) {
+                sendMessageMutation.mutate(messagePayload);
+                forceScrollRef.current = true;
+                return;
+            }
+
+            toast.error('Message was not sent. WebSocket is connected but delivery failed, please retry.');
+            return;
+        }
+
+        if (wsStatus === WebSocketStatus.DISCONNECTED || wsStatus === WebSocketStatus.ERROR) {
             sendMessageMutation.mutate(messagePayload);
             forceScrollRef.current = true;
             return;
         }
 
-        sendMessageMutation.mutate(messagePayload);
-        forceScrollRef.current = true;
+        toast.error('Connection is still establishing. Please wait a moment and retry.');
     };
 
     useEffect(() => {
@@ -587,11 +649,11 @@ export const ConversationPage = () => {
                                         </motion.div>
 
                                         {/* Agent Response */}
-                                        {(msg.agent_response || msg.backend_message_id) ? (
+                                        {(msg.isStreaming || msg.agent_response || msg.backend_message_id) ? (
                                             <motion.div
                                                 initial={{ opacity: 0, x: -20 }}
                                                 animate={{ opacity: 1, x: 0 }}
-                                                transition={{ delay: index * 0.05 + 0.15 }}
+                                                transition={{ duration: 0.15 }}
                                                 className="flex justify-start"
                                             >
                                                 <div className="max-w-[75%]">
@@ -604,12 +666,18 @@ export const ConversationPage = () => {
                                                         </span>
                                                     </div>
                                                     <div className="bg-[var(--bg-tertiary)] text-[var(--text-primary)] rounded-2xl rounded-tl-sm px-4 py-2.5">
-                                                        <div className="markdown-content text-sm leading-relaxed">
-                                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                                {msg.agent_response || ''}
-                                                            </ReactMarkdown>
-                                                            {msg.isStreaming && (
-                                                                <span className="inline-block ml-1 animate-pulse text-[var(--accent-primary)]">▋</span>
+                                                        <div className="text-sm leading-relaxed">
+                                                            {msg.isStreaming ? (
+                                                                <p className="whitespace-pre-wrap break-words">
+                                                                    {msg.agent_response || ''}
+                                                                    <span className="inline-block ml-1 animate-pulse text-[var(--accent-primary)] align-baseline">▋</span>
+                                                                </p>
+                                                            ) : (
+                                                                <div className="markdown-content">
+                                                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                                        {msg.agent_response || ''}
+                                                                    </ReactMarkdown>
+                                                                </div>
                                                             )}
                                                         </div>
                                                         {msg.response_time_ms && (
