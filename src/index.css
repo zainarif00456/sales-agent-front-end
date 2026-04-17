@@ -69,23 +69,56 @@
   }
 
   @keyframes gradient {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
 
-    0%,
-    100% {
-      background-position: 0% 50%;
+  /* ── API cascade: word-by-word emergence ── */
+  @keyframes apiWordReveal {
+    from {
+      opacity: 0;
+      filter: blur(4px);
+      transform: translateY(5px);
     }
-
-    50% {
-      background-position: 100% 50%;
+    to {
+      opacity: 1;
+      filter: blur(0px);
+      transform: translateY(0px);
     }
   }
 
-  .scrollbar-hide::-webkit-scrollbar {
-    display: none;
+  .api-word {
+    display: inline;
+    opacity: 0;
+    animation: apiWordReveal 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation-delay: var(--word-delay, 0ms);
   }
 
-  .scrollbar-hide {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+  /* ── Markdown body consistent spacing ── */
+  .markdown-body > * + * { margin-top: 0.35rem; }
+  .markdown-body pre { white-space: pre-wrap; word-break: break-word; }
+
+  /* ── Streaming cursor pulse ── */
+  @keyframes cursorPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
   }
+  .stream-cursor { animation: cursorPulse 0.75s step-end infinite; }
+
+  /* ── Card glow hover ── */
+  .card-glow:hover {
+    box-shadow: 0 0 0 1px rgba(139,92,246,0.2), 0 20px 40px -12px rgba(139,92,246,0.18);
+  }
+
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
+  .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+  /* ── Thin scrollbar for chat ── */
+  .scrollbar-thin::-webkit-scrollbar { width: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 4px;
+  }
+  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: var(--border-color) transparent; }
 }
