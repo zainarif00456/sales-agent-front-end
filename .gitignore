@@ -30,3 +30,6 @@ lerna-debug.log*
 .env.test.local
 .env.production.local
 .env
+.claude/
+graphify-out/
+CLAUDE.md
