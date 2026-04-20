@@ -15,6 +15,7 @@ const agentSchema = z.object({
     role: z.string().min(1, 'Role is required'),
     company: z.string().optional(),
     personality_description: z.string().min(10, 'Personality description must be at least 10 characters'),
+    message_style: z.string().max(2000, 'Keep this under 2000 characters.').optional(),
     years_of_experience: z.number().min(0).optional(),
     current_projects: z.string().optional(),
     education: z.string().optional(),
@@ -33,6 +34,8 @@ export const CreateAgentPage = () => {
         register,
         handleSubmit,
         formState: { errors },
+        watch,
+        setValue,
     } = useForm<AgentFormData>({
         resolver: zodResolver(agentSchema),
         defaultValues: {
@@ -82,6 +85,7 @@ export const CreateAgentPage = () => {
             ...data,
             expertise_areas: expertiseAreas,
             resume_file: resumeFile || undefined,
+            message_style: data.message_style?.trim() || null,
         };
 
         createMutation.mutate(agentData);
@@ -181,6 +185,37 @@ export const CreateAgentPage = () => {
                                         {errors.personality_description.message}
                                     </p>
                                 )}
+                            </div>
+
+                            <div>
+                                <div className="flex items-center justify-between mb-2">
+                                    <label className="block text-sm font-medium text-[var(--text-primary)]">
+                                        Client Message Style
+                                        <span className="ml-1.5 text-xs text-[var(--text-secondary)] font-normal">(optional)</span>
+                                    </label>
+                                    {watch('message_style') && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setValue('message_style', '')}
+                                            className="text-xs text-[var(--text-secondary)] hover:text-red-400 transition-colors"
+                                        >
+                                            Clear
+                                        </button>
+                                    )}
+                                </div>
+                                <textarea
+                                    {...register('message_style')}
+                                    rows={4}
+                                    maxLength={2000}
+                                    className="input-field resize-none"
+                                    placeholder="Describe how your outbound client messages should look. Example: Keep messages under 3 sentences. Use the client's first name. Casual but professional. Always end with a question."
+                                />
+                                {errors.message_style && (
+                                    <p className="mt-1 text-sm text-red-500">{errors.message_style.message}</p>
+                                )}
+                                <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                                    Applied only when generating messages for clients. Leave blank to use your agent's natural personality.
+                                </p>
                             </div>
 
                             <div>

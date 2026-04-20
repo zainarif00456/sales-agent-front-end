@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Plus, Search, Edit, Trash2, MessageSquare,
-    Users, Bot, Clock, Sparkles, Zap,
+    Users, Bot, Clock, Sparkles, Zap, PenLine,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -129,6 +129,16 @@ const AgentCard = ({
                             +{(agent.expertise_areas || []).length - 3}
                         </span>
                     )}
+                </div>
+            )}
+
+            {/* ── Custom Message Style badge ── */}
+            {agent.message_style && (
+                <div className="flex items-center gap-1.5 mb-3.5">
+                    <PenLine className="w-3 h-3 flex-shrink-0" style={{ color: grad1 }} />
+                    <span className="text-[10px] font-semibold truncate" style={{ color: grad1 }}>
+                        Custom Message Style
+                    </span>
                 </div>
             )}
 

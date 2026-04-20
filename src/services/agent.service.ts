@@ -14,6 +14,7 @@ export interface Agent {
     role: string;
     company?: string;
     personality_description: string;
+    message_style?: string | null;
     expertise_areas: string[];
     years_of_experience?: number;
     current_projects?: string;
@@ -35,6 +36,7 @@ export interface AgentCreateData {
     role: string;
     company?: string;
     personality_description: string;
+    message_style?: string | null;
     expertise_areas: string[];
     years_of_experience?: number;
     current_projects?: string;
@@ -74,6 +76,7 @@ const agentService = {
         if (data.education) formData.append('education', data.education);
         if (data.temperature) formData.append('temperature', data.temperature.toString());
         if (data.resume_file) formData.append('resume_file', data.resume_file);
+        if (data.message_style) formData.append('message_style', data.message_style);
 
         const response = await apiClient.post('/agents/', formData, {
             headers: { 'Content-Type': 'multipart/form-data' },
@@ -94,6 +97,10 @@ const agentService = {
         if (data.education) formData.append('education', data.education);
         if (data.temperature !== undefined) formData.append('temperature', data.temperature.toString());
         if (data.resume_file) formData.append('resume_file', data.resume_file);
+        if (data.message_style !== undefined) {
+            // Send empty string when null (clears the field server-side)
+            formData.append('message_style', data.message_style ?? '');
+        }
 
         const response = await apiClient.patch(`/agents/${id}/`, formData, {
             headers: { 'Content-Type': 'multipart/form-data' },
