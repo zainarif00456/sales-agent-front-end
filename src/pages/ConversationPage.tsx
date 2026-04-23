@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, User, Bot, Loader2, FileText, Image as ImageIcon, Paperclip, X, Brain, Zap } from 'lucide-react';
+import { Send, User, Bot, Loader2, FileText, Image as ImageIcon, Paperclip, X, Brain, Zap, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Layout } from '@/components/Layout';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
@@ -17,6 +17,7 @@ import {
     type Message,
     type SessionListResponse,
 } from '@/services/conversation.service';
+import type { InfiniteData } from '@tanstack/react-query';
 import { useAgentWebSocket, WebSocketStatus } from '@/hooks/useAgentWebSocket';
 import { fileToDataUrl } from '@/lib/attachments';
 
@@ -213,6 +214,7 @@ const AgentBubble = ({
 // ── Page ───────────────────────────────────────────────────────────────────────
 export const ConversationPage = () => {
     const { sessionId } = useParams<{ sessionId: string }>();
+    const navigate = useNavigate();
     const queryClient = useQueryClient();
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -228,6 +230,7 @@ export const ConversationPage = () => {
     const [isThinking, setIsThinking] = useState(false);
     const [thinkingMessage, setThinkingMessage] = useState('');
     const [sessionTitle, setSessionTitle] = useState('');
+    const [isDeleting, setIsDeleting] = useState(false);
 
     const token = localStorage.getItem('access_token') || '';
 
@@ -236,6 +239,33 @@ export const ConversationPage = () => {
         queryFn: () => conversationService.getSession(sessionId!),
         enabled: !!sessionId,
     });
+
+    // Delete session mutation
+    const deleteSessionMutation = useMutation({
+        mutationFn: (id: string) => conversationService.deleteSession(id),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['conversations'] });
+            toast.success('Conversation deleted successfully');
+            navigate('/conversations');
+        },
+        onError: (error: any) => {
+            toast.error(error?.response?.data?.message || 'Failed to delete conversation');
+            setIsDeleting(false);
+        },
+    });
+
+    const handleDeleteSession = async () => {
+        if (!sessionId) return;
+        
+        const confirmed = window.confirm(
+            'Are you sure you want to delete this conversation? This action cannot be undone.'
+        );
+        
+        if (confirmed) {
+            setIsDeleting(true);
+            deleteSessionMutation.mutate(sessionId);
+        }
+    };
 
     const [localMessages, setLocalMessages] = useState<ConversationMessage[]>([]);
 
@@ -250,8 +280,8 @@ export const ConversationPage = () => {
         setSessionTitle(next);
         queryClient.setQueryData<ConversationSession | undefined>(['conversation', sessionId], cur =>
             cur ? { ...cur, title: next } : cur);
-        queryClient.setQueryData<SessionListResponse | undefined>(['conversations'], cur =>
-            cur ? { ...cur, results: cur.results.map(i => i.id === sessionId ? { ...i, title: next } : i) } : cur);
+        queryClient.setQueryData<InfiniteData<SessionListResponse> | undefined>(['conversations'], cur =>
+            cur ? { ...cur, pages: cur.pages.map(page => ({ ...page, results: page.results.map(i => i.id === sessionId ? { ...i, title: next } : i) })) } : cur);
     }, [queryClient, sessionId]);
 
     const markPendingMessageAsStreaming = useCallback((backendMessageId?: string) => {
@@ -507,6 +537,16 @@ export const ConversationPage = () => {
                             style={{ border: `1px solid ${session.is_active ? 'rgba(16,185,129,0.2)' : 'rgba(100,100,100,0.15)'}` }}>
                             {session.is_active ? '● Active' : '● Inactive'}
                         </span>
+                        <motion.button
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            onClick={handleDeleteSession}
+                            disabled={isDeleting}
+                            className="p-2 rounded-lg text-red-500 hover:bg-red-500/10 hover:text-red-600 transition-all duration-200 disabled:opacity-50"
+                            title="Delete conversation"
+                        >
+                            <Trash2 className="w-5 h-5" />
+                        </motion.button>
                     </div>
                 </motion.div>
 
